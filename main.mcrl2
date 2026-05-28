@@ -1,0 +1,68 @@
+sort  IP  = Nat;
+      MAC = Nat;
+      Port     = Nat;
+      MACTable = MAC -> Port;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+sort Data;
+cons d1, d2: Data;
+
+act  send, save, remove, read : Data;
+     comm_put: Data;
+     comm_get: Data;
+
+proc Producer = send(d1).Producer + send(d2).Producer;
+
+proc Consumer = sum d: Data. read(d) . Consumer;
+
+
+
+proc Buffer0(N: Nat) = sum d: Data. save(d) . Buffer1(d, N);
+
+%proc Buffer1(x: Data, N: Nat) = 
+%  if(N > 1,
+%     (sum d: Data .save(d).Buffer2(x, d, N)) + (remove(x).Buffer0(N)),
+%     remove(x) . Buffer0(N)
+%  );
+
+proc Buffer1(x: Data, N: Nat) = 
+       (N > 1) -> (
+         (sum d: Data. save(d) . Buffer2(x, d, N)) + (remove(x).Buffer0(N))) <> 
+         (remove(x) . Buffer0(N));
+
+proc Buffer2(x: Data, y: Data, N: Nat) = remove(x).Buffer1(y, N);
+
+
+init allow({comm_put, comm_get},
+       comm(
+         {send | save -> comm_put,
+          remove | read -> comm_get
+         },
+         Producer || Buffer0(2)  %toggle the size to 1 or 2
+         || Consumer
+       )
+     );
+
+     

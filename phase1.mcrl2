@@ -1,0 +1,89 @@
+sort Mac = Nat;
+sort Port = Nat;
+
+sort Data = struct d1;
+sort Frame = struct frame(src_mac: Mac, dest_mac: Mac, payload: Data);
+
+sort MacEntry = struct entry(m: Mac, po: Port);
+sort MacTable = List(MacEntry);
+
+map
+  MAX_CAPACITY: Nat;
+  in_table: Mac # MacTable -> Bool;
+  lookup: Mac # MacTable -> Port;
+  update_table: Mac # Port # MacTable -> MacTable;
+  size: MacTable -> Nat;
+
+var
+  m1, m2: Mac;
+  p: Port;
+  t: MacTable;
+  e: MacEntry;
+
+eqn
+  MAX_CAPACITY = 2;
+
+  size([]) = 0;
+  size(e |> t) = 1 + size(t);
+
+  in_table(m1, []) = false;
+  in_table(m1, entry(m2, p) |> t) = if(m1 == m2, true, in_table(m1, t));
+
+%   lookup(m1, []) = 0;
+  lookup(m1, entry(m2, p) |> t) = if(m1 == m2, p, lookup(m1, t));
+
+  update_table(m1, p, t) = if(in_table(m1, t), t, 
+                            if(size(t) < MAX_CAPACITY, entry(m1, p) |> t, t));
+
+act
+  s_host, r_switch, c_host_switch: Port # Frame;
+  s_switch, r_host, c_switch_host: Port # Frame;
+  
+  drop_frame: Mac # Frame;
+
+proc
+  Host(my_mac: Mac, my_port: Port) =
+    (sum dest: Mac . (dest != my_mac && dest != 0 && dest <= 2) ->
+        s_host(my_port, frame(my_mac, dest, d1)) . Host(my_mac, my_port))
+    +
+    s_host(my_port, frame(my_mac, 0, d1)) . Host(my_mac, my_port)
+    +
+    (sum src: Mac, dest: Mac, d: Data . r_host(my_port, frame(src, dest, d)) .
+        ((dest == my_mac || dest == 0) ->
+            Host(my_mac, my_port) <>
+            drop_frame(my_mac, frame(src, dest, d)) . Host(my_mac, my_port)
+        )
+    );
+
+  Flood(src_port: Port, f: Frame) =
+    (src_port == 1) -> s_switch(2, f) <>
+    (src_port == 2) -> s_switch(1, f);
+
+  Switch(t: MacTable) =
+    sum p: Port, src: Mac, dest: Mac, d: Data .
+    r_switch(p, frame(src, dest, d)) .
+    (
+      (dest == 0) -> 
+        Flood(p, frame(src, dest, d)) . Switch(update_table(src, p, t)) <>
+      
+      (dest != 0 && in_table(dest, update_table(src, p, t))) ->
+        (
+          (lookup(dest, update_table(src, p, t)) == p) -> 
+            Switch(update_table(src, p, t)) <>
+          
+          (lookup(dest, update_table(src, p, t)) != p) -> 
+            s_switch(lookup(dest, update_table(src, p, t)), frame(src, dest, d)) . 
+            Switch(update_table(src, p, t))
+        ) <>
+      
+      (dest != 0 && !(in_table(dest, update_table(src, p, t)))) -> 
+        Flood(p, frame(src, dest, d)) . Switch(update_table(src, p, t))
+    );
+
+init
+  allow({c_host_switch, c_switch_host, drop_frame},
+    comm({s_host | r_switch -> c_host_switch, 
+          s_switch | r_host -> c_switch_host},
+      Host(1, 1) || Host(2, 2) || Switch([])
+    )
+  );

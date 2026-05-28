@@ -1,0 +1,153 @@
+sort Mac  = struct MAC1 | MAC2 | NOMAC;
+sort IP   = struct IP1 | IP2;
+sort Port = struct PORT1 | PORT2;
+
+sort Data = struct d1;
+sort Type = struct normal | ARP_req | ARP_rep;
+sort Frame = struct frame(type: Type, src_mac: Mac, dest_mac: Mac, src_ip: IP, dest_ip:IP, payload: Data);
+
+sort MacEntry = struct mac_entry(mac_entry_m: Mac, mac_entry_p: Port);
+sort MacTable = List(MacEntry);
+
+sort ArpEntry = struct arp_entry(arp_entry_ip: IP, arp_entry_m: Mac);
+sort ArpTable = List(ArpEntry);
+
+
+
+%---------------------------------------------MAC Table EQ --------------------------------------------------------
+map
+  MAX_CAPACITY_MAC: Nat;
+  in_table_mac: Mac # MacTable -> Bool;
+  lookup_mac: Mac # MacTable -> Port;
+  update_table_mac: Mac # Port # MacTable -> MacTable;
+  size_mac: MacTable -> Nat;
+
+var
+  m1, m2: Mac;
+  p: Port;
+  mac_t: MacTable;
+  mac_e: MacEntry;
+
+eqn
+  MAX_CAPACITY_MAC = 2;
+
+  size_mac([]) = 0;
+  size_mac(mac_e |> mac_t) = 1 + size_mac(mac_t);
+
+  in_table_mac(m1, []) = false;
+  in_table_mac(m1, mac_entry(m2, p) |> mac_t) = if(m1 == m2, true, in_table_mac(m1, mac_t));
+
+%   lookup_mac(m1, []) = 0;
+  lookup_mac(m1, mac_entry(m2, p) |> mac_t) = if(m1 == m2, p, lookup_mac(m1, mac_t));
+
+  update_table_mac(m1, p, mac_t) = if(in_table_mac(m1, mac_t), mac_t, 
+                            if(size_mac(mac_t) < MAX_CAPACITY_MAC, mac_entry(m1, p) |> mac_t, mac_t));
+
+%---------------------------------------------ARP Table EQ --------------------------------------------------------
+map  
+  MAX_CAPACITY_ARP: Nat;
+  in_table_arp: IP # ArpTable -> Bool;
+  lookup_arp: IP # ArpTable -> Mac;
+  update_table_arp: IP # Mac # ArpTable -> ArpTable;
+  size_arp: ArpTable -> Nat;
+var
+  ip1, ip2: IP;
+  mac: Mac;
+  arp_t: ArpTable;
+  arp_e: ArpEntry;
+
+eqn
+  MAX_CAPACITY_ARP = 2;
+
+  size_arp([]) = 0;
+  size_arp(arp_e |> arp_t) = 1 + size_arp(arp_t);
+
+  in_table_arp(ip1, []) = false;
+  in_table_arp(ip1, arp_entry(ip2, mac) |> arp_t) = if(ip1 == ip2, true, in_table_arp(ip1, arp_t));
+
+%   lookup_arp(ip1, []) = 0;
+  lookup_arp(ip1, arp_entry(ip2, mac) |> arp_t) = if(ip1 == ip2, mac, lookup_arp(ip1, arp_t));
+
+  update_table_arp(ip1, mac, arp_t) = if(in_table_arp(ip1, arp_t), arp_t, 
+                            if(size_arp(arp_t) < MAX_CAPACITY_ARP, arp_entry(ip1, mac) |> arp_t, arp_t));
+
+
+act
+  s_host, r_switch, c_host_switch: Port # Frame;
+  s_switch, r_host, c_switch_host: Port # Frame;
+  
+  drop_frame: Mac # Frame;
+
+proc
+  Host(my_arp:ArpTable, my_mac: Mac, my_port: Port, my_ip: IP) = 
+    (sum ip2:IP . (in_table_arp(ip2, my_arp) && ip2 != my_ip) ->  
+      s_host(my_port, frame(normal, my_mac, lookup_arp(ip2, my_arp), my_ip, ip2, d1)) . Host(my_arp, my_mac, my_port, my_ip)
+    )
+    +
+    (sum src: Mac, dest: Mac, d: Data, ip2:IP . r_host(my_port, frame(normal, src, dest, ip2, my_ip, d)) .
+        ((dest == my_mac || dest == NOMAC) ->
+            Host(my_arp, my_mac, my_port, my_ip) <>
+            drop_frame(my_mac, frame(normal, src, dest, ip2, my_ip, d)) . Host(my_arp, my_mac, my_port, my_ip)
+        )
+    )
+    +
+    (sum ip2:IP . (!in_table_arp(ip2, my_arp) && ip2 != my_ip) ->  
+      s_host(my_port, frame(ARP_req, my_mac, NOMAC, my_ip, ip2, d1)) . 
+      (sum mac2:Mac . 
+          r_host(my_port, frame(ARP_rep, mac2, my_mac, ip2, my_ip, d1)) . 
+          Host(update_table_arp(ip2, mac2, my_arp), my_mac, my_port, my_ip)
+      )
+    )
+    +
+    (sum ip2:IP, ip1:IP, mac2:Mac . (mac2 != my_mac) ->  
+      r_host(my_port, frame(ARP_req, mac2, NOMAC, ip2, ip1, d1)) . 
+      ((ip1 == my_ip) ->
+        s_host(my_port, frame(ARP_rep, my_mac, mac2, my_ip, ip2, d1)) . Host(my_arp, my_mac, my_port, my_ip) <>
+        drop_frame(my_mac, frame(ARP_req, mac2, NOMAC, ip2, ip1, d1)) . Host(my_arp, my_mac, my_port, my_ip)
+      ) 
+        
+    );
+
+  Flood(src_port: Port, f: Frame) =
+    (src_port == PORT1) -> s_switch(PORT2, f) <>
+    (src_port == PORT2) -> s_switch(PORT1, f);
+
+  Switch(t: MacTable) =
+    (sum p: Port, src: Mac, dest: Mac, d: Data, ip_sr:IP, ip_des:IP .
+      r_switch(p, frame(normal, src, dest, ip_sr, ip_des, d)) .
+      (
+        (dest == NOMAC) -> 
+          Flood(p, frame(normal, src, dest, ip_sr, ip_des, d)) . Switch(update_table_mac(src, p, t)) <>
+        
+        (dest != NOMAC && in_table_mac(dest, update_table_mac(src, p, t))) ->
+          (
+            (lookup_mac(dest, update_table_mac(src, p, t)) == p) -> 
+              Switch(update_table_mac(src, p, t)) <>
+            
+            (lookup_mac(dest, update_table_mac(src, p, t)) != p) -> 
+              s_switch(lookup_mac(dest, update_table_mac(src, p, t)), frame(normal, src, dest, ip_sr, ip_des, d)) . 
+              Switch(update_table_mac(src, p, t))
+          ) <>
+        
+        (dest != NOMAC && !(in_table_mac(dest, update_table_mac(src, p, t)))) -> 
+          Flood(p, frame(normal, src, dest, ip_sr, ip_des, d)) . Switch(update_table_mac(src, p, t))
+      )
+    )
+    +
+    (sum p: Port, src: Mac, d: Data, ip_sr:IP, ip_des:IP .
+      r_switch(p, frame(ARP_req, src, NOMAC, ip_sr, ip_des, d)) .
+      Flood(p, frame(ARP_req, src, NOMAC, ip_sr, ip_des, d)) . 
+      (sum p2:Port, src2:Mac . r_switch(p2, frame(ARP_rep, src2, src, ip_des, ip_sr, d)) .
+        s_switch(lookup_mac(src, update_table_mac(src, p, update_table_mac(src2, p2, t))), frame(ARP_rep, src2, src, ip_des, ip_sr, d)) . 
+        Switch(update_table_mac(src, p, update_table_mac(src2, p2, t)))
+      )
+    )
+    ;
+
+init
+  allow({c_host_switch, c_switch_host, drop_frame},
+    comm({s_host | r_switch -> c_host_switch, 
+          s_switch | r_host -> c_switch_host},
+      Host([], MAC1, PORT1, IP1) || Host([], MAC2, PORT2, IP2) || Switch([])
+    )
+  );
