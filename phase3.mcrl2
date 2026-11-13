@@ -150,14 +150,14 @@ proc
     (sum ip2:IP, my_other_ip:IP . (!in_table_arp(ip2, my_arp) && ip2 != my_ip && ip2 != my_other_ip && (my_other_ip == my_ip || my_other_ip == fake_ip)) ->  
       s_host(my_port, frame(ARP_req, my_mac, NOMAC, my_other_ip, ip2, d1)) . 
       (sum mac2:Mac . 
-          r_host(my_port, frame(ARP_rep, mac2, my_mac, ip2, my_other_ip, d1)) . 
+          r_host(my_port, frame(ARP_rep, mac2, my_mac, ip2, my_other_ip, d1)) . %add time out option here that lets the host no block
           Crazy(update_table_arp(ip2, mac2, my_arp), my_mac, my_port, my_ip, fake_ip)
       )
     )
     +
     (sum ip2:IP, mac2:Mac, my_other_ip:IP . (mac2 != my_mac && (my_other_ip == my_ip || my_other_ip == fake_ip)) ->  
       r_host(my_port, frame(ARP_req, mac2, NOMAC, ip2, my_other_ip, d1)) . 
-      s_host(my_port, frame(ARP_rep, my_mac, mac2, my_other_ip, ip2, d1)) . 
+      s_host(my_port, frame(ARP_rep, my_mac, mac2, my_other_ip, ip2, d1)) . %add time out
       Crazy(update_table_arp(ip2, mac2, my_arp), my_mac, my_port, my_ip, fake_ip)
     )
     +
@@ -178,7 +178,7 @@ proc
     (sum p: Port, src: Mac, dest: Mac, d: Data, ip_sr:IP, ip_des:IP .
       r_switch(p, frame(normal, src, dest, ip_sr, ip_des, d)) .
       (
-        in_table_mac(dest, update_table_mac(src, p, t)) ->
+        (in_table_mac(dest, update_table_mac(src, p, t))) ->
               s_switch(lookup_mac(dest, update_table_mac(src, p, t)), frame(normal, src, dest, ip_sr, ip_des, d)) . 
               Switch(update_table_mac(src, p, t))
          <>
@@ -189,15 +189,9 @@ proc
     (sum p: Port, src: Mac, d: Data, ip_sr:IP, ip_des:IP .
       r_switch(p, frame(ARP_req, src, NOMAC, ip_sr, ip_des, d)) .
       Flood(p, frame(ARP_req, src, NOMAC, ip_sr, ip_des, d)) . 
-      Switch(update_table_mac(src, p, t))
-    )
-    +
-    (sum p2:Port, src2:Mac, src: Mac, d: Data, ip_sr:IP, ip_des:IP. 
-      r_switch(p2, frame(ARP_rep, src2, src, ip_des, ip_sr, d)) .
-      (
-        in_table_mac(src, t) ->
-        s_switch(lookup_mac(src, t), frame(ARP_rep, src2, src, ip_des, ip_sr, d)) . 
-        Switch(update_table_mac(src2, p2, t))
+      (sum p2:Port, src2:Mac . r_switch(p2, frame(ARP_rep, src2, src, ip_des, ip_sr, d)) . %add timeout
+        s_switch(lookup_mac(src, update_table_mac(src, p, update_table_mac(src2, p2, t))), frame(ARP_rep, src2, src, ip_des, ip_sr, d)) . 
+        Switch(update_table_mac(src, p, update_table_mac(src2, p2, t)))
       )
     )
     ;
@@ -206,6 +200,6 @@ init
   allow({c_host_switch, c_switch_host, drop_frame},
     comm({s_host | r_switch -> c_host_switch, 
           s_switch | r_host -> c_switch_host},
-      Host([], MAC1, PORT1, IP1) || Host([], MAC2, PORT2, IP2) || Host([], MAC3, PORT3, IP3) || Switch([])
+      Host([], MAC1, PORT1, IP1) || Host([], MAC2, PORT2, IP2) || Crazy([], MAC3, PORT3, IP3, IP2) || Switch([])
     )
   );
