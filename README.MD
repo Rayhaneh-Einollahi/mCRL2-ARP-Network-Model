@@ -19,13 +19,14 @@ The system models a switched LAN environment consisting of the following core en
 To analyze how the state space scales with the number of hosts ($n$), the model was generated and visualized for three network sizes:
 
 ### 1. Network Size $n = 1$
-![State Space for n=1](size1.png)
+<img src="size1.png" width="300" height="auto" alt="State Space n=1">
 
 ### 2. Network Size $n = 2$
-![State Space for n=2](size2.png)
+<img src="size2.png" width="300" height="auto" alt="State Space n=2">
 
 ### 3. Network Size $n = 3$
-![State Space for n=3](size3.png)
+<img src="size3.png" width="300" height="auto" alt="State Space n=3">
+<!-- ![State Space for n=3](size3.png) -->
 
 ## How to Run
 1. Linearize the mCRL2 specification:
